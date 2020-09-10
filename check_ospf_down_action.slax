@@ -1,0 +1,124 @@
+/*
+ * Author		: SVTECH TEAM/tu.doan
+ * Version		: 1.3
+ * Last Modified : Aug 2017
+ * Platform	  : MX Series
+ * Release		: 13.3 and above
+ *
+ * Description	: This event script automatically check ospf neighbor
+ * on AGG Routers and automatically offline MIC where connection to SRTs
+ */
+version 1.0;
+ 
+ns junos = "http://xml.juniper.net/junos/*/junos";
+ns xnm = "http://xml.juniper.net/xnm/1.1/xnm";
+ns jcs = "http://xml.juniper.net/junos/commit-scripts/1.0";
+ 
+import "../import/junos.xsl";
+var $conn = jcs:open();
+ 
+/* This variable defines the CLI help text */
+var $arguments = {
+	<argument> {
+		<name> "uplink1";
+		<description> "Uplink Interface to be Tracked";
+	}
+	<argument> {
+		<name> "uplink2";
+		<description> "Uplink Interface2 to be Tracked";
+	}
+	<argument> {
+		<name> "uplink3";
+		<description> "Uplink Interface3 to be Tracked";
+	}
+	<argument> {
+		<name> "uplink4";
+		<description> "Uplink Interface4 to be Tracked";
+	}
+	<argument> {
+		<name> "cli_command";
+		<description> "Cli command to be activated when two Uplink is down";
+	}
+	<argument> {
+		<name> "shell_command";
+		<description> "Shell command to be activated when two Uplink is down";
+	}
+}
+param $uplink1;
+param $uplink2;
+param $uplink3;
+param $uplink4;
+param $cli_command = "";
+param $shell_command  = "";
+
+
+
+match / {
+	<event-script-results>{
+	/* Retrieve the current configuration */
+		if (not($conn)){
+			<xnm:error> {
+				<message> "Not able to connect with local mgd";
+			}
+		}
+		expr jcs:syslog(25," Check_ospf_down_script: Detected LINK_DOWN - checking OSPF state on Uplink " _ $uplink1 _ " and " _ $uplink2 _ " and " _ $uplink3 _ " and " _ $uplink4);
+		/* get information  interfaces */
+		mvar $nbr=0;
+		var $ospf-neigh-res = jcs:execute( $conn, "get-ospf-neighbor-information" );
+		if( $ospf-neigh-res//self::xnm:error ) {
+		  expr jcs:syslog(25,"Unable to open file: ", $ospf-neigh-res/self::xnm:error/message );
+		  <xsl:message terminate="yes">;
+		}
+		for-each($ospf-neigh-res/ospf-neighbor[(interface-name== $uplink1) or (interface-name== $uplink2) or (interface-name== $uplink3) or (interface-name== $uplink4)]) {
+			var $nbrstate=ospf-neighbor-state;
+			var $interface=interface-name;
+			expr jcs:syslog(25," Current state of neighbor on interface " _ $interface _ " is " _ $nbrstate);
+			if ($nbrstate=="Full"){
+				set $nbr=$nbr+1;
+			}
+		}
+		expr jcs:syslog(25," Total current Uplink OSPF neighbor is " _ $nbr);
+		/* check if ospf is down to do action disable down link interfaces */
+		if ($nbr==3){
+			expr jcs:syslog(25," Check_ospf_down_script: Missing one uplink, three uplink still OK ");
+		/* close the connection. End of the script */
+			var $close-results = jcs:close( $conn );
+		}
+		else if ($nbr==2){
+			expr jcs:syslog(25," Check_ospf_down_script: Missing one uplink, two uplink still OK ");
+		/* close the connection. End of the script */
+			var $close-results = jcs:close( $conn );
+		}
+		else if ($nbr==1){
+			expr jcs:syslog(25," Check_ospf_down_script: Missing three uplink, one uplink still OK ");
+		/* close the connection. End of the script */
+			var $close-results = jcs:close( $conn );
+		}
+		else if ($nbr==0){
+			if  ((shell_command = "")  and ($cli_command = "")) {
+				expr jcs:syslog(25," Check_ospf_down_script: OSPF neighbor on both Uplink is gone but no shell command or cli command is defined, exiting");
+			}
+			if ($shell_command != "" ) {
+				expr jcs:syslog(25," Check_ospf_down_script: OSPF neighbor on both Uplink is gone and shell command is defined , executing shell command " _ $shell_command);
+				var $shell_invoker = {
+					<request-shell-execute> {
+						<command> $shell_command;
+					}
+				}
+				var $shell_results = jcs:invoke($shell_invoker);
+				expr jcs:syslog(25," Check_ospf_down_script: command \"" _ $shell_command _ "\" executed, result is " _ $shell_results);
+			}
+			if ($cli_command != "" ) {
+				expr jcs:syslog(25," Check_ospf_down_script: OSPF neighbor on both Uplink is gone and cli command is defined , executing cli command " _ $cli_command);
+				var $cli_invoker =  {
+					<command>  $cli_command;
+				}
+				var $cli_results = jcs:execute($conn, $cli_invoker);
+				expr jcs:syslog(25," Check_ospf_down_script: command \"" _ $shell_command _ "\" executed" _ $cli_results);
+			}
+			/* close the connection. End of the script */
+			var $close-results = jcs:close( $conn );
+		}
+  }
+}
+
